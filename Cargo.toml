@@ -1,0 +1,18 @@
+[package]
+name = "deimos"
+description = "EVE Online static data as JSON, pulled from CCP's static data export and content CDN"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/NicolasKion/deimos"
+keywords = ["eve-online", "static-data", "sde", "gamedev"]
+categories = ["game-development", "parser-implementations"]
+readme = "README.md"
+
+[dependencies]
+reqwest = { version = "0.13", features = ["blocking", "json"] }
+rusqlite = { version = "0.38", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+zip = { version = "8", default-features = false, features = ["deflate"] }
