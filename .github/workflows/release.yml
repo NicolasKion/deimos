@@ -101,10 +101,7 @@ jobs:
         run: |
           set -euo pipefail
           tar --zstd -cf "eve-data-${{ needs.check.outputs.tag }}.tar.zst" -C dump .
-          # Also on its own, since it is the one container consumers cannot produce themselves.
-          zstd -q -o "spacecomponentsbytype-${{ needs.check.outputs.client_build }}.json.zst" \
-            dump/fsd_built/spacecomponentsbytype.json
-          ls -lh *.tar.zst *.json.zst
+          ls -lh ./*.tar.zst
 
       - name: Release
         env:
@@ -114,17 +111,15 @@ jobs:
           set -euo pipefail
           notes="Static data export build \`${{ needs.check.outputs.export_build }}\`, client build \`${{ needs.check.outputs.client_build }}\`.
 
-          - \`eve-data-*.tar.zst\` - the whole dump: client \`.static\` containers, the export in client
-            shape and verbatim, and \`spacecomponentsbytype\` decoded with the client's own loader
-            (${{ steps.spacecomps.outputs.entries }} entries).
-          - \`spacecomponentsbytype-*.json.zst\` - that container on its own, for consumers that already
-            build the rest themselves."
+          One archive holding the whole dump: client \`.static\` containers, the export in client shape
+          and verbatim, and \`spacecomponentsbytype\` decoded with the client's own loader
+          (${{ steps.spacecomps.outputs.entries }} entries)."
 
           # Re-runs and forced builds land on a tag that already exists, so replace its assets
           # rather than falling over.
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --notes "$notes"
-            gh release upload "$TAG" ./*.tar.zst ./*.json.zst --clobber
+            gh release upload "$TAG" ./*.tar.zst --clobber
           else
-            gh release create "$TAG" --title "EVE data $TAG" --notes "$notes" ./*.tar.zst ./*.json.zst
+            gh release create "$TAG" --title "EVE data $TAG" --notes "$notes" ./*.tar.zst
           fi
