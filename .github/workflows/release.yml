@@ -1,0 +1,130 @@
+name: release
+
+# Publishes a dump whenever CCP ships new data.
+#
+# Two things move independently: the static data export (its own build number) and the game client
+# (another). Either changing means the dump is stale, so the check compares both against the last
+# release and only does the expensive work when something moved.
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Build even if the last release is already current"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      stale: ${{ steps.compare.outputs.stale }}
+      tag: ${{ steps.compare.outputs.tag }}
+      export_build: ${{ steps.compare.outputs.export_build }}
+      client_build: ${{ steps.compare.outputs.client_build }}
+    steps:
+      - id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          agent='deimos-ci (+https://github.com/${{ github.repository }})'
+
+          export_build=$(curl -fsS -A "$agent" \
+            https://developers.eveonline.com/static-data/tranquility/latest.jsonl \
+            | jq -r 'select(._key == "sde") | .buildNumber')
+          client_build=$(curl -fsS -A "$agent" \
+            https://binaries.eveonline.com/eveclient_TQ.json | jq -r .build)
+          tag="sde-${export_build}-client-${client_build}"
+
+          echo "export build $export_build, client build $client_build -> $tag"
+          if [ "$FORCE" = "true" ]; then
+            stale=true
+          elif gh release view "$tag" --repo '${{ github.repository }}' >/dev/null 2>&1; then
+            stale=false
+          else
+            stale=true
+          fi
+          echo "stale=$stale" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "export_build=$export_build" >> "$GITHUB_OUTPUT"
+          echo "client_build=$client_build" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    if: needs.check.outputs.stale == 'true'
+    # amd64 with 4 KB pages, which is what Wine needs. This is the whole reason the job lives here
+    # rather than on a developer's machine.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free up disk
+        run: |
+          # A full dump is around 600 MB before compression, and the default runner image is
+          # generous with things this job will never use.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Dump everything the network can supply
+        run: |
+          cargo build --release
+          target/release/deimos ./dump
+
+      - name: Decode space components with the client's own loader
+        id: spacecomps
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends msitools wine wine64
+          tools/space-components.sh ./dump
+          entries=$(jq 'length' dump/fsd_built/spacecomponentsbytype.json)
+          echo "decoded $entries space component entries"
+          echo "entries=$entries" >> "$GITHUB_OUTPUT"
+
+      - name: Report what came out
+        run: |
+          find dump -name '*.json' | sort | while read -r file; do
+            printf '%-52s %8s  %s entries\n' "${file#dump/}" \
+              "$(du -h "$file" | cut -f1)" "$(jq 'length' "$file")"
+          done
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          tar --zstd -cf "eve-data-${{ needs.check.outputs.tag }}.tar.zst" -C dump .
+          # Also on its own, since it is the one container consumers cannot produce themselves.
+          zstd -q -o "spacecomponentsbytype-${{ needs.check.outputs.client_build }}.json.zst" \
+            dump/fsd_built/spacecomponentsbytype.json
+          ls -lh *.tar.zst *.json.zst
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          set -euo pipefail
+          notes="Static data export build \`${{ needs.check.outputs.export_build }}\`, client build \`${{ needs.check.outputs.client_build }}\`.
+
+          - \`eve-data-*.tar.zst\` - the whole dump: client \`.static\` containers, the export in client
+            shape and verbatim, and \`spacecomponentsbytype\` decoded with the client's own loader
+            (${{ steps.spacecomps.outputs.entries }} entries).
+          - \`spacecomponentsbytype-*.json.zst\` - that container on its own, for consumers that already
+            build the rest themselves."
+
+          # Re-runs and forced builds land on a tag that already exists, so replace its assets
+          # rather than falling over.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes "$notes"
+            gh release upload "$TAG" ./*.tar.zst ./*.json.zst --clobber
+          else
+            gh release create "$TAG" --title "EVE data $TAG" --notes "$notes" ./*.tar.zst ./*.json.zst
+          fi
