@@ -62,6 +62,7 @@ pub fn write_latest(
     if !matches!(containers, Containers::None) {
         let cdn = Cdn::connect()?;
         files.extend(write_containers(&cdn, containers, out_dir)?);
+        files.push(write_icons(&cdn, &mut export, out_dir)?);
     }
 
     Ok(Dump { build_number, files })
@@ -152,6 +153,81 @@ pub fn write_containers(cdn: &Cdn, containers: Containers<'_>, out_dir: &Path) -
         files.push(keymap.finish(0)?);
     }
     Ok(files)
+}
+
+/// Fetch the icons the market groups use and write them beside the data.
+///
+/// Type icons come from CCP's image service, but group icons do not exist there: they are client
+/// art, referenced by the export as `res:/` paths. There are a few hundred and they are tiny, so
+/// they travel with the dump rather than being fetched at run time.
+pub fn write_icons(cdn: &Cdn, export: &mut Export, out_dir: &Path) -> Result<FileReport, Error> {
+    #[derive(serde::Deserialize)]
+    struct Icon {
+        #[serde(rename = "_key")]
+        key: i32,
+        #[serde(rename = "iconFile")]
+        file: Option<String>,
+    }
+
+    /// Anything that names an icon. Market groups and dogma attributes both do, under the same
+    /// key, so one shape reads either table.
+    #[derive(serde::Deserialize)]
+    struct Illustrated {
+        #[serde(rename = "iconID")]
+        icon_id: Option<i32>,
+    }
+
+    let mut files = std::collections::BTreeMap::new();
+    export.read("icons.jsonl", |icon: Icon| {
+        if let Some(file) = icon.file {
+            files.insert(icon.key, file);
+        }
+        Ok(())
+    })?;
+    // Market groups illustrate the browser; dogma attributes illustrate the numbers, and are the
+    // same marks the game puts beside powergrid, CPU, tracking and the rest in its own fitting
+    // window.
+    let mut wanted = std::collections::BTreeSet::new();
+    for table in ["marketGroups.jsonl", "dogmaAttributes.jsonl"] {
+        export.read(table, |record: Illustrated| {
+            if let Some(icon) = record.icon_id {
+                wanted.insert(icon);
+            }
+            Ok(())
+        })?;
+    }
+
+    let dir = out_dir.join("icons");
+    fs::create_dir_all(&dir).map_err(|source| Error::Write {
+        path: dir.display().to_string(),
+        source,
+    })?;
+    let mut written = 0;
+    let mut skipped = 0;
+    for icon in wanted {
+        let Some(path) = files.get(&icon) else {
+            skipped += 1;
+            continue;
+        };
+        // The index spells these paths inconsistently, so ask for what the export said and let the
+        // lookup fail quietly when the art has moved.
+        match cdn.fetch(path).or_else(|_| cdn.fetch(&path.to_lowercase())) {
+            Ok(bytes) => {
+                let dest = dir.join(format!("{icon}.png"));
+                fs::write(&dest, bytes).map_err(|source| Error::Write {
+                    path: dest.display().to_string(),
+                    source,
+                })?;
+                written += 1;
+            }
+            Err(_) => skipped += 1,
+        }
+    }
+    Ok(FileReport {
+        path: "icons".to_owned(),
+        written,
+        skipped,
+    })
 }
 
 /// Write the file that records which build the dump came from.

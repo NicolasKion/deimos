@@ -8,6 +8,7 @@
 //!   --tables a,b,c        export tables to write out verbatim; defaults to all of them
 //!   --no-client           skip the client CDN entirely
 //!   --no-tables           skip the verbatim export tables (they are the bulk of the output)
+//!   --icons-only          fetch only the icons into an existing dump
 //!   --list                list the client's containers and exit
 //! ```
 
@@ -40,6 +41,15 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Args) -> Result<(), deimos::Error> {
+    if args.icons_only {
+        let cdn = Cdn::connect()?;
+        let zip = args.export.clone().ok_or_else(|| deimos::Error::MissingEntry("--export".into()))?;
+        let mut export = deimos::sde::Export::open(&zip)?;
+        let report = dump::write_icons(&cdn, &mut export, &args.out_dir)?;
+        println!("{} icons written, {} unavailable", report.written, report.skipped);
+        return Ok(());
+    }
+
     if args.list {
         let cdn = Cdn::connect()?;
         println!("client build {}", cdn.build());
@@ -88,6 +98,7 @@ struct Args {
     tables: Option<String>,
     no_client: bool,
     no_tables: bool,
+    icons_only: bool,
     list: bool,
 }
 
@@ -99,6 +110,7 @@ impl Args {
         let mut tables = None;
         let mut no_client = false;
         let mut no_tables = false;
+        let mut icons_only = false;
         let mut list = false;
 
         let mut args = std::env::args().skip(1);
@@ -110,6 +122,7 @@ impl Args {
                 "--tables" => tables = Some(value("--tables")?),
                 "--no-client" => no_client = true,
                 "--no-tables" => no_tables = true,
+                "--icons-only" => icons_only = true,
                 "--list" => list = true,
                 "-h" | "--help" => return Err(String::new()),
                 other if other.starts_with('-') => return Err(format!("unknown option {other}")),
@@ -129,6 +142,7 @@ impl Args {
             tables,
             no_client,
             no_tables,
+            icons_only,
             list,
         })
     }

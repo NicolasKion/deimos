@@ -21,6 +21,8 @@ use crate::Error;
 const BINARIES: &str = "https://binaries.eveonline.com";
 const RESOURCES: &str = "https://resources.eveonline.com";
 const STATIC_DATA: &str = "res:/staticdata/";
+/// Interface art, which is where the icons live. Case varies across the index.
+const UI: &str = "res:/ui/";
 
 /// The live server. Others CCP publishes builds for include `sisi`.
 pub const TRANQUILITY: &str = "tq";
@@ -168,17 +170,23 @@ fn read_cache_table(db_path: &std::path::Path, container: &str) -> Result<Option
     rows.collect::<Result<Vec<_>, _>>().map(Some).map_err(fail)
 }
 
-/// Every `res:/staticdata/` entry in the resource index, keyed by container name.
+/// Static data and interface art from the resource index. Static data is keyed by container name,
+/// since that is how callers ask for it; art is keyed by its full path.
 fn static_data_index(http: &reqwest::blocking::Client, url: &str) -> Result<BTreeMap<String, Resource>, Error> {
     let mut resources = BTreeMap::new();
     for_each_index_line(http, url, |path, hash, bytes| {
-        if let Some(bytes) = bytes.filter(|_| path.starts_with(STATIC_DATA)) {
+        let wanted = path.starts_with(STATIC_DATA) || path.to_ascii_lowercase().starts_with(UI);
+        if let Some(bytes) = bytes.filter(|_| wanted) {
             let resource = Resource {
                 path: path.to_owned(),
                 hash: hash.to_owned(),
                 bytes,
             };
-            resources.insert(resource.container().to_owned(), resource);
+            let key = match resource.path.starts_with(STATIC_DATA) {
+                true => resource.container().to_owned(),
+                false => resource.path.clone(),
+            };
+            resources.insert(key, resource);
         }
         true
     })?;
