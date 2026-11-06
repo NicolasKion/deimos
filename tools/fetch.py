@@ -5,6 +5,7 @@ The route is the launcher's: eveclient_TQ.json names the build, eveonline_<build
 application files, and the resource index it points at maps res:/ paths to content hashes.
 """
 
+import gzip
 import json
 import sys
 import urllib.request
@@ -18,7 +19,11 @@ DATA = "res:/staticdata/spacecomponentsbytype.fsdbinary"
 
 
 def open_url(url):
-    return urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": AGENT}), timeout=300)
+    response = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": AGENT}), timeout=300)
+    # The CDN stores some files gzipped and says so in Content-Encoding, which urllib leaves alone.
+    if response.headers.get("Content-Encoding") == "gzip":
+        return gzip.GzipFile(fileobj=response)
+    return response
 
 
 def get(url):
