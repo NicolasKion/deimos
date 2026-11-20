@@ -28,7 +28,8 @@ if [ ! -f "$PYTHON27" ]; then
     # wineboot complains about a missing 32-bit rundll32 in a pure win64 prefix, which is expected
     # and harmless here: the interpreter and the loader are both x86-64.
     wineboot --init 2>&1 | grep -v syswow64 || true
-    wineserver -w
+    # Debian's Wine 10 (Ubuntu 26.04) no longer puts wineserver on PATH.
+    "$(command -v wineserver || echo /usr/lib/x86_64-linux-gnu/wine/wineserver)" -w
 
     # The MSI is unpacked rather than installed: a headless MSI install under Wine is the flakiest
     # step in the whole business, and none of what it does - registry keys, PATH, file associations
